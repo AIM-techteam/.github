@@ -268,11 +268,6 @@ def main():
     github_token = os.environ.get("GITHUB_TOKEN")
     pr_number_str = os.environ.get("PR_NUMBER")
     repo_full_name = os.environ.get("REPO_FULL_NAME")
-    pr_title = os.environ.get("PR_TITLE", "")
-    pr_body = os.environ.get("PR_BODY", "")
-    base_branch = os.environ.get("PR_BASE_BRANCH", "main")
-    head_branch = os.environ.get("PR_HEAD_BRANCH", "")
-    pr_author = os.environ.get("PR_AUTHOR", "unknown")
 
     # Validate that all required secrets / env vars are present
     missing = []
@@ -296,6 +291,30 @@ def main():
     gh = Github(github_token)
     repo = gh.get_repo(repo_full_name)
     pr = repo.get_pull(pr_number)
+
+    # ── Fetch PR metadata directly from the GitHub API ────────────────────────
+    # This works for manual triggers because it reads from the PR object itself,
+    # not from GitHub Actions event context variables (which are empty on workflow_dispatch).
+    pr_title = pr.title
+    pr_author = pr.user.login
+    base_branch = pr.base.ref
+    head_branch = pr.head.ref
+    print(f"   PR: '{pr_title}' by {pr_author} ({head_branch} → {base_branch})")
+
+    # ── Get PR description, falling back to first comment if body is empty ────
+    # Some teams write the motivation/description as the first comment on the PR
+    # instead of filling in the PR body field. We check both so nothing is missed.
+    pr_body = pr.body.strip() if pr.body and pr.body.strip() else ""
+    if not pr_body:
+        print("   PR body is empty, checking first comment for description...")
+        all_comments = list(pr.get_issue_comments())
+        # Prefer the first comment written by the PR author
+        author_comments = [c for c in all_comments if c.user.login == pr_author]
+        if author_comments:
+            pr_body = f"_(From author's first comment)_\n\n{author_comments[0].body}"
+            print(f"   Found description in comment by {pr_author}")
+        else:
+            pr_body = "_No description provided._"
 
     # ── Gather PR data ─────────────────────────────────────────────────────────
     print("📥 Fetching PR diff...")
@@ -334,7 +353,48 @@ def main():
     review_text = message.content[0].text
     print(f"   Review received: {len(review_text):,} characters")
 
+    # ── Generate a concise fix prompt for the critical issues ─────────────────
+    # Ask Claude to distill only the critical issues into a ready-to-paste prompt
+    # that the developer can drop directly into Claude/Cursor/Copilot to fix them.
+    print("🔧 Generating fix prompt for critical issues...")
+    fix_prompt_response = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=1024,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "Based on this code review, extract ONLY the 🔴 Critical Issues "
+                    "and write a single, concise, copy-paste-ready prompt that a developer "
+                    "can give to an AI coding assistant (Claude, Cursor, Copilot) to fix all "
+                    "of them in one shot.\n\n"
+                    "Rules for the prompt you write:\n"
+                    "- Be specific: reference exact file names and what needs to change\n"
+                    "- Be direct: no preamble, no explanation, just the instruction\n"
+                    "- If there are no critical issues, respond with exactly: NO_CRITICAL_ISSUES\n\n"
+                    f"Review:\n{review_text}"
+                )
+            }
+        ],
+    )
+    fix_prompt_text = fix_prompt_response.content[0].text.strip()
+    has_critical_issues = fix_prompt_text != "NO_CRITICAL_ISSUES"
+
     # ── Format the final comment ───────────────────────────────────────────────
+    # Build the fix prompt block only when there are critical issues to fix.
+    fix_prompt_block = ""
+    if has_critical_issues:
+        fix_prompt_block = f"""
+---
+
+### 🔧 Fix Prompt
+> Copy and paste this directly into Claude, Cursor, or Copilot to fix all critical issues:
+
+```
+{fix_prompt_text}
+```
+"""
+
     # The REVIEW_MARKER is an invisible HTML comment used to identify and
     # delete this bot's comments on future re-runs (keeps PR timeline clean).
     comment_body = f"""{REVIEW_MARKER}
@@ -347,9 +407,9 @@ def main():
 ---
 
 {review_text}
-
+{fix_prompt_block}
 ---
-<sub>🔄 This review is automatically regenerated on each push. Previous reviews are removed.</sub>
+<sub>🔄 Re-run this workflow any time to get a fresh review. Previous reviews are removed automatically.</sub>
 """
 
     # ── Post to GitHub ─────────────────────────────────────────────────────────
