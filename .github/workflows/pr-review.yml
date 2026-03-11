@@ -1,0 +1,57 @@
+name: Claude PR Review (Reusable)
+
+on:
+  workflow_call:
+    # Inputs passed in by the calling repo's workflow
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: string
+      repo_full_name:
+        description: 'Full repo name, e.g. my-org/my-repo'
+        required: true
+        type: string
+    # Secrets passed in from the calling repo (org secrets flow through automatically)
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review-pr:
+    name: Run Claude PR Review
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the CENTRAL org repo (where review_agent.py lives), not the caller's repo.
+      # The agent script only needs to be in one place.
+      - name: Checkout org .github repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/.github
+          # No token needed if the .github repo is public within the org.
+          # If it's private, add: token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install anthropic PyGithub requests
+
+      - name: Run PR Review Agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # GITHUB_TOKEN here has permissions scoped to the CALLING repo (not this one),
+          # which is exactly what we need to post comments on that repo's PRs.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          # Use the repo name passed by the caller, not the org repo name
+          REPO_FULL_NAME: ${{ inputs.repo_full_name }}
+        run: python scripts/review_agent.py
