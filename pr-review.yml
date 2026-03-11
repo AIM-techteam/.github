@@ -1,0 +1,23 @@
+name: PR Review
+
+# Manual trigger only - go to Actions tab and click "Run workflow"
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: string
+
+# This workflow doesn't do the review itself.
+# It just calls the shared reusable workflow that lives in the org's .github repo.
+# All review logic and the agent script are maintained centrally there.
+jobs:
+  call-review:
+    uses: AIM-techteam/.github/.github/workflows/pr-review-reusable.yml@main
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      # Pass the current repo's full name so the agent knows where to post comments
+      repo_full_name: ${{ github.repository }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
