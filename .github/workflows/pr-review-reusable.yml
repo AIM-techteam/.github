@@ -1,5 +1,8 @@
 name: Claude PR Review (Reusable)
 
+# This is a REUSABLE workflow. It lives in your org's central `.github` repo.
+# Individual repos don't copy this file — they just call it (see caller-template below).
+# This means you only ever maintain the review logic in ONE place.
 on:
   workflow_call:
     # Inputs passed in by the calling repo's workflow
@@ -31,14 +34,14 @@ jobs:
       # Checkout the CENTRAL org repo (where review_agent.py lives), not the caller's repo.
       # The agent script only needs to be in one place.
       - name: Checkout org .github repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
           repository: ${{ github.repository_owner }}/.github
           # No token needed if the .github repo is public within the org.
           # If it's private, add: token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.4.0
         with:
           python-version: '3.11'
 
